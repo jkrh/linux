@@ -71,6 +71,19 @@ config TRUSTED_KEYS
 
 	  If you are unsure as to whether this is required, answer N.
 
+config TRUSTED_EXT_KEYS
+	tristate "TRUSTED EXTERNAL KEYS"
+	depends on KEYS
+	select CRYPTO
+	help
+	  This option provides support for creating, sealing, and unsealing
+	  keys via a registered userspace helper that is able to talk to a
+	  external trust source (hardware or software). Note that if you
+	  turn the option on, prebuilt keyhelper must be present as
+	  security/keys/keyhelper_umh as static elf executable.
+
+	  If you are unsure as to whether this is required, answer N.
+
 config ENCRYPTED_KEYS
 	tristate "ENCRYPTED KEYS"
 	depends on KEYS

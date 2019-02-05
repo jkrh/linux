@@ -1,0 +1,12 @@
+CC = $(CROSS_COMPILE)gcc
+OBJDUMP = $(CROSS_COMPILE)objdump
+OBJCOPY = $(CROSS_COMPILE)objcopy
+UMEXEC = keyhelper_umh
+
+$(UMEXEC): umhelper.c
+	$(CC) -Wl,--strip-all -Os -Wall -I../../include/keys -static $< -o $@
+
+all: $(UMEXEC)
+
+clean:
+	rm -f $(UMEXEC)
