@@ -236,8 +236,11 @@ int ima_appraise_measurement(enum ima_hooks func,
 			iint->flags |= IMA_NEW_FILE;
 		if ((iint->flags & IMA_NEW_FILE) &&
 		    (!(iint->flags & IMA_DIGSIG_REQUIRED) ||
-		     (inode->i_size == 0)))
+		     (inode->i_size == 0))) {
+			if (test_bit(IMA_UPDATE_XATTR, &iint->atomic_flags))
+				ima_fix_xattr(dentry, iint);
 			status = INTEGRITY_PASS;
+		}
 		goto out;
 	}
 

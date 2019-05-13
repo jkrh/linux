@@ -20,6 +20,8 @@ extern int ima_bprm_check(struct linux_binprm *bprm);
 extern int ima_file_check(struct file *file, int mask);
 extern void ima_post_create_tmpfile(struct inode *inode);
 extern void ima_file_free(struct file *file);
+extern void ima_file_update(struct file *file);
+extern void ima_delayed_update(struct file *file);
 extern int ima_file_mmap(struct file *file, unsigned long prot);
 extern int ima_load_data(enum kernel_load_data_id id);
 extern int ima_read_file(struct file *file, enum kernel_read_file_id id);
@@ -55,6 +57,16 @@ static inline int ima_bprm_check(struct linux_binprm *bprm)
 static inline int ima_file_check(struct file *file, int mask)
 {
 	return 0;
+}
+
+static inline void ima_file_update(struct file *file)
+{
+	return;
+}
+
+static inline void ima_delayed_update(struct file *file)
+{
+	return;
 }
 
 static inline void ima_post_create_tmpfile(struct inode *inode)

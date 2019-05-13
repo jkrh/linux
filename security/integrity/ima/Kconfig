@@ -296,3 +296,32 @@ config IMA_APPRAISE_SIGNED_INIT
 	default n
 	help
 	   This option requires user-space init to be signed.
+
+config IMA_MEASURE_WRITES
+	bool "Measure file writes (EXPERIMENTAL)"
+	depends on IMA
+	default n
+	help
+	   By default IMA measures files only when they close or sync.
+	   Choose this option if you want integrity hashes to update
+	   when the files are still open for writing.
+
+config IMA_HASH_LATENCY
+	int
+	depends on IMA
+	range 0 60000
+	default 50
+	help
+	   This value defines the measurement interval when files are
+	   being written. Value is in milliseconds.
+
+config IMA_HASH_LATENCY_CEILING
+	int
+	depends on IMA
+	range 100 60000
+	default 30000
+	help
+	   In order to maintain high write performance for large files,
+	   IMA increases the measurement interval as the file size grows.
+	   This value defines the ceiling for the measurement delay in
+	   milliseconds.
