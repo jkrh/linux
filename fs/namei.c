@@ -3418,8 +3418,11 @@ finish_open_created:
 		goto out;
 opened:
 	error = ima_file_check(file, op->acc_mode);
-	if (!error && will_truncate)
+	if (!error && will_truncate) {
 		error = handle_truncate(file);
+		if (!error)
+			ima_file_update(file);
+	}
 out:
 	if (unlikely(error > 0)) {
 		WARN_ON(1);
