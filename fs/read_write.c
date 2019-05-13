@@ -20,6 +20,7 @@
 #include <linux/compat.h>
 #include <linux/mount.h>
 #include <linux/fs.h>
+#include <linux/ima.h>
 #include "internal.h"
 
 #include <linux/uaccess.h>
@@ -490,11 +491,16 @@ static ssize_t new_sync_write(struct file *filp, const char __user *buf, size_t 
 static ssize_t __vfs_write(struct file *file, const char __user *p,
 			   size_t count, loff_t *pos)
 {
+	ssize_t sz;
+
 	if (file->f_op->write)
 		return file->f_op->write(file, p, count, pos);
-	else if (file->f_op->write_iter)
-		return new_sync_write(file, p, count, pos);
-	else
+	else if (file->f_op->write_iter) {
+		sz = new_sync_write(file, p, count, pos);
+		if (sz >= 1)
+			ima_file_update(file);
+		return sz;
+	} else
 		return -EINVAL;
 }
 
