@@ -14,6 +14,7 @@
 #include <linux/file.h>
 #include <linux/syscalls.h>
 #include <linux/sched.h>
+#include <linux/ima.h>
 
 /*
  * MS_SYNC syncs the entire file - including mappings.
@@ -94,6 +95,9 @@ SYSCALL_DEFINE3(msync, unsigned long, start, size_t, len, int, flags)
 			down_read(&mm->mmap_sem);
 			vma = find_vma(mm, start);
 		} else {
+			if (file)
+				ima_delayed_update(file);
+
 			if (start >= end) {
 				error = 0;
 				goto out_unlock;
