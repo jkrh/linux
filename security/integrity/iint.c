@@ -86,6 +86,8 @@ static void iint_free(struct integrity_iint_cache *iint)
 	iint->ima_creds_status = INTEGRITY_UNKNOWN;
 	iint->evm_status = INTEGRITY_UNKNOWN;
 	iint->measured_pcrs = 0;
+	WARN_ON(iint->ima_work.file);
+	WARN_ON(!list_empty(&iint->file_list));
 	kmem_cache_free(iint_cache, iint);
 }
 
@@ -165,6 +167,7 @@ static void init_once(void *foo)
 	iint->ima_read_status = INTEGRITY_UNKNOWN;
 	iint->ima_creds_status = INTEGRITY_UNKNOWN;
 	iint->evm_status = INTEGRITY_UNKNOWN;
+	INIT_LIST_HEAD(&iint->file_list);
 	mutex_init(&iint->mutex);
 }
 

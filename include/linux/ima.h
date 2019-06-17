@@ -106,6 +106,15 @@ static inline void ima_post_path_mknod(struct dentry *dentry)
 
 #endif /* CONFIG_IMA */
 
+#if defined(CONFIG_IMA) && defined(CONFIG_IMA_MEASURE_WRITES)
+extern void ima_delayed_inode_update(struct inode *inode);
+#else
+static inline void ima_delayed_inode_update(struct inode *inode)
+{
+	return;
+}
+#endif
+
 #ifndef CONFIG_IMA_KEXEC
 struct kimage;
 

@@ -124,6 +124,11 @@ struct ima_work_entry {
 	struct file *file;
 };
 
+struct ima_fl_entry {
+	struct list_head list;
+	struct file *file;
+};
+
 /* integrity data associated with an inode */
 struct integrity_iint_cache {
 	struct rb_node rb_node;	/* rooted in integrity_iint_tree */
@@ -141,6 +146,7 @@ struct integrity_iint_cache {
 	enum integrity_status evm_status:4;
 	struct ima_digest_data *ima_hash;
 	struct ima_work_entry ima_work;
+	struct list_head file_list;
 };
 
 /* rbtree tree calls to lookup, insert, delete

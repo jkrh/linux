@@ -316,6 +316,20 @@ static inline int security_filter_rule_match(u32 secid, u32 field, u32 op,
 }
 #endif /* CONFIG_IMA_LSM_RULES */
 
+#ifndef CONFIG_IMA_MEASURE_WRITES
+static inline void ima_get_file_light(struct file *file,
+				      struct integrity_iint_cache *iint)
+{
+	return;
+}
+
+static inline void ima_free_file_ref(struct integrity_iint_cache *iint,
+				     struct file *file)
+{
+	return;
+}
+#endif /* CONFIG_IMA_MEASURE_WRITES */
+
 #ifdef	CONFIG_IMA_READ_POLICY
 #define	POLICY_FILE_FLAGS	(S_IWUSR | S_IRUSR)
 #else

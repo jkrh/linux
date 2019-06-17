@@ -28,6 +28,7 @@
 #include <linux/tracepoint.h>
 #include <linux/device.h>
 #include <linux/memcontrol.h>
+#include <linux/ima.h>
 #include "internal.h"
 
 /*
@@ -1352,6 +1353,8 @@ __writeback_single_inode(struct inode *inode, struct writeback_control *wbc)
 	trace_writeback_single_inode_start(inode, wbc, nr_to_write);
 
 	ret = do_writepages(mapping, wbc);
+	if (ret == 0 && nr_to_write > 0)
+		ima_delayed_inode_update(inode);
 
 	/*
 	 * Make sure to wait on the data before writing out the metadata.
