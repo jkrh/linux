@@ -99,6 +99,8 @@ static inline void ima_kexec_cmdline(const void *buf, int size) {}
 #if ((defined CONFIG_IMA) && defined(CONFIG_IMA_MEASURE_WRITES))
 void ima_file_update(struct file *file);
 void ima_file_delayed_update(struct file *file);
+void ima_inode_update(struct inode *inode);
+void ima_inode_delayed_update(struct inode *inode);
 #else
 static inline void ima_file_update(struct file *file)
 {
@@ -107,6 +109,14 @@ static inline void ima_file_update(struct file *file)
 static inline void ima_file_delayed_update(struct file *file)
 {
 	return;
+}
+static inline void ima_inode_update(struct inode *inode)
+{
+	return;
+}
+static inline void ima_inode_delayed_update(struct inode *inode)
+{
+        return;
 }
 #endif
 
