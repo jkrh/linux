@@ -16,7 +16,8 @@
  *
  * File: ima_main.c
  *	implements the IMA hooks: ima_bprm_check, ima_file_mmap,
- *	ima_delayed_update, ima_file_update and ima_file_check.
+ *	ima_delayed_update, ima_delayed_inode_update,
+ *	ima_file_update and ima_file_check.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -33,6 +34,7 @@
 #include <linux/workqueue.h>
 #include <linux/sizes.h>
 #include <linux/fs.h>
+#include <linux/writeback.h>
 
 #include "ima.h"
 
@@ -150,26 +152,87 @@ static void ima_rdwr_violation_check(struct file *file,
 				  "invalid_pcr", "open_writers");
 }
 
+#ifdef CONFIG_IMA_MEASURE_WRITES
+/**
+ * ima_get_file_light
+ *
+ * Grab file without get_file(file), used by ima_delayed_inode_update().
+ * Called with iint->mutex held.
+ */
+static void ima_get_file_light(struct file *file,
+			       struct integrity_iint_cache *iint)
+{
+	struct ima_fl_entry *e;
+
+	if (!iint || !file)
+		return;
+	if (!(file->f_mode & FMODE_WRITE) ||
+	    !test_bit(IMA_UPDATE_XATTR, &iint->atomic_flags))
+		return;
+
+	list_for_each_entry(e, &iint->file_list, list) {
+		if (e->file == file)
+			return;
+	}
+	e = kmalloc(sizeof(*e), GFP_KERNEL);
+	if (!e)
+		return;
+	e->file = file;
+	list_add(&e->list, &iint->file_list);
+}
+
+/**
+ * ima_free_file_ref
+ *
+ * Remove the file from iint cache. Called with iint->mutex held. See
+ * ima_delayed_inode_update() for details.
+ */
+static void ima_free_file_ref(struct integrity_iint_cache *iint,
+			      struct file *file)
+{
+	struct ima_fl_entry *e;
+
+	list_for_each_entry(e, &iint->file_list, list) {
+		if (e->file == file) {
+			list_del(&e->list);
+			kfree(e);
+			break;
+		}
+	}
+}
+#endif /* CONFIG_IMA_MEASURE_WRITES */
+
 static void ima_check_last_writer(struct integrity_iint_cache *iint,
 				  struct inode *inode, struct file *file)
 {
 	fmode_t mode = file->f_mode;
-	bool update;
+	bool update, last_writer;
 
 	if (!(mode & FMODE_WRITE))
 		return;
 
+	/*
+	 * Update security.ima always after last fput() if the file has
+	 * changed and IMA_UPDATE_XATTR is set. Additionally reset the
+	 * appraisal/mesurement status if we're the last writer.
+	 */
 	mutex_lock(&iint->mutex);
-	if (atomic_read(&inode->i_writecount) == 1) {
-		update = test_and_clear_bit(IMA_UPDATE_XATTR,
-					    &iint->atomic_flags);
-		if (!IS_I_VERSION(inode) ||
-		    !inode_eq_iversion(inode, iint->version) ||
-		    (iint->flags & IMA_NEW_FILE)) {
+	ima_free_file_ref(iint, file);
+
+	if (!IS_I_VERSION(inode) ||
+	   !inode_eq_iversion(inode, iint->version) ||
+	   (iint->flags & IMA_NEW_FILE)) {
+		update = test_bit(IMA_UPDATE_XATTR, &iint->atomic_flags);
+		last_writer = atomic_read(&inode->i_writecount) == 1;
+		if (last_writer) {
+			clear_bit(IMA_UPDATE_XATTR, &iint->atomic_flags);
 			iint->flags &= ~(IMA_DONE_MASK | IMA_NEW_FILE);
 			iint->measured_pcrs = 0;
-			if (update)
-				ima_update_xattr(iint, file);
+		}
+		if (update) {
+			if (!last_writer)
+				iint->flags &= ~IMA_COLLECTED;
+			ima_update_xattr(iint, file);
 		}
 	}
 	mutex_unlock(&iint->mutex);
@@ -296,6 +359,12 @@ static int process_measurement(struct file *file, const struct cred *cred,
 		set_bit(IMA_UPDATE_XATTR, &iint->atomic_flags);
 	}
 
+	if (must_appraise && (file->f_mode & FMODE_WRITE))
+		set_bit(IMA_UPDATE_XATTR, &iint->atomic_flags);
+
+	/* Cache file for measurements triggered from inode writeback */
+	ima_get_file_light(file, iint);
+
 	/* Nothing to do, just return existing appraised status */
 	if (!action) {
 		if (must_appraise) {
@@ -348,12 +417,9 @@ out_locked:
 out:
 	if (pathbuf)
 		__putname(pathbuf);
-	if (must_appraise) {
+	if (must_appraise)
 		if (rc && (ima_appraise & IMA_APPRAISE_ENFORCE))
 			return -EACCES;
-		if (file->f_mode & FMODE_WRITE)
-			set_bit(IMA_UPDATE_XATTR, &iint->atomic_flags);
-	}
 	return 0;
 }
 
@@ -474,6 +540,135 @@ out:
 	mutex_unlock(&iint->mutex);
 }
 EXPORT_SYMBOL_GPL(ima_delayed_update);
+
+#ifdef CONFIG_IMA_MEASURE_WRITES
+/**
+ * ima_delayed_inode_update - delayed measurement update of an inode
+ * @inode: dirty inode chosen for writeback
+ *
+ * Schedule work to measure the first available 'struct file' cached
+ * in the iint entry referencing this inode. This allows IMA to track
+ * inode writebacks.
+ *
+ * Note that we haven't incremented the refcount for the files we keep
+ * track of in order to not mess up the normal get_file()/fput()
+ * refcounting. If we see a file whose f_count is already zero, we
+ * simply skip it. It will be removed from file_list in
+ * ima_check_last_writer(), called from __fput().
+ *
+ * If we fail to find any available file reference, the measurement
+ * will be handled by ima_check_last_writer().
+ */
+
+void ima_delayed_inode_update(struct inode *inode)
+{
+	struct integrity_iint_cache *iint;
+	struct ima_fl_entry *e;
+	unsigned long msecs;
+	bool creq;
+
+	if (!ima_policy_flag || !S_ISREG(inode->i_mode))
+		return;
+
+	iint = integrity_iint_find(inode);
+	if (!iint)
+		return;
+
+	if (!test_bit(IMA_UPDATE_XATTR, &iint->atomic_flags))
+		return;
+
+	mutex_lock(&iint->mutex);
+	if (iint->ima_work.file)
+		goto out;
+
+	list_for_each_entry(e, &iint->file_list, list) {
+		/* f_count can be 0 already, so we do "get_file_not_zero()" */
+		if (atomic_long_inc_not_zero(&e->file->f_count) == 0)
+			continue;
+
+		iint->ima_work.file = e->file;
+		msecs = ima_inode_update_delay(inode);
+		INIT_DELAYED_WORK(&iint->ima_work.work,
+				  ima_delayed_update_handler);
+
+		creq = queue_delayed_work(ima_update_wq,
+					  &iint->ima_work.work,
+					  msecs_to_jiffies(msecs));
+		if (creq == false) {
+			iint->ima_work.file = NULL;
+			fput(e->file);
+		}
+		/* only try to use the first eligible e->file */
+		break;
+	}
+out:
+	mutex_unlock(&iint->mutex);
+}
+EXPORT_SYMBOL_GPL(ima_delayed_inode_update);
+
+static void __ima_inode_update(struct inode *inode, unsigned long delay)
+{
+	struct integrity_iint_cache *iint;
+	struct ima_fl_entry *e;
+	bool creq;
+
+	if (!ima_policy_flag || !S_ISREG(inode->i_mode))
+		return;
+
+	iint = integrity_iint_find(inode);
+	if (!iint)
+		return;
+
+	if (!test_bit(IMA_UPDATE_XATTR, &iint->atomic_flags))
+		return;
+
+	mutex_lock(&iint->mutex);
+	if (iint->ima_work.file)
+		goto out;
+
+	if (delay == 0) {
+		/* No get_file() needed when e->file is used synchronously */
+		e = list_first_entry_or_null(&iint->file_list, typeof(*e), list);
+		if (!e)
+			goto out;
+
+		iint->flags &= ~IMA_COLLECTED;
+		ima_update_xattr(iint, e->file);
+		if (IS_I_VERSION(inode))
+			iint->version = inode_query_iversion(inode);
+	}
+
+	list_for_each_entry(e, &iint->file_list, list) {
+		/* f_count can be 0 already, so we do "get_file_not_zero()" */
+		if (atomic_long_inc_not_zero(&e->file->f_count) == 0)
+			continue;
+
+		iint->ima_work.file = e->file;
+		INIT_DELAYED_WORK(&iint->ima_work.work,
+				  ima_delayed_update_handler);
+
+		creq = queue_delayed_work(ima_update_wq,
+					  &iint->ima_work.work,
+					  msecs_to_jiffies(delay));
+		if (creq == false) {
+			iint->ima_work.file = NULL;
+			fput(e->file);
+		}
+		/* only try to use the first eligible e->file */
+		break;
+	}
+out:
+	mutex_unlock(&iint->mutex);
+}
+
+void ima_inode_update(struct inode *inode, int sync_mode)
+{
+	if (sync_mode == WB_SYNC_ALL)
+		__ima_inode_update(inode, 0);
+	else
+		__ima_inode_update(inode, ima_inode_update_delay(inode));
+}
+#endif
 
 /**
  * ima_file_update - update the file measurement
