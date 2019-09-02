@@ -38,6 +38,7 @@
 #include <linux/sched/rt.h>
 #include <linux/sched/signal.h>
 #include <linux/mm_inline.h>
+#include <linux/ima.h>
 #include <trace/events/writeback.h>
 
 #include "internal.h"
@@ -2346,6 +2347,12 @@ int do_writepages(struct address_space *mapping, struct writeback_control *wbc)
 			break;
 		cond_resched();
 		congestion_wait(BLK_RW_ASYNC, HZ/50);
+	}
+	if (ret == 0) {
+		if (wbc->sync_mode == WB_SYNC_ALL)
+			ima_inode_update(mapping->host);
+		else
+			ima_inode_delayed_update(mapping->host);
 	}
 	return ret;
 }

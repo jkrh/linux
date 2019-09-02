@@ -162,6 +162,10 @@ int ima_lsm_policy_change(struct notifier_block *nb, unsigned long event,
 			  void *lsm_data);
 #if ((defined CONFIG_IMA) && defined(CONFIG_IMA_MEASURE_WRITES))
 void ima_cancel_measurement(struct integrity_iint_cache *iint);
+void ima_get_file(struct integrity_iint_cache *iint,
+		  struct file *file);
+void ima_put_file(struct integrity_iint_cache *iint,
+		  struct file *file);
 #else
 static inline void ima_cancel_measurement(struct integrity_iint_cache *iint)
 {
@@ -169,6 +173,16 @@ static inline void ima_cancel_measurement(struct integrity_iint_cache *iint)
 }
 static inline void ima_init_measurement(struct integrity_iint_cache *iint,
 					struct dentry *dentry)
+{
+	return;
+}
+static inline void ima_get_file(struct integrity_iint_cache *iint,
+				struct file *file)
+{
+	return;
+}
+static inline void ima_put_file(struct integrity_iint_cache *iint,
+				struct file *file)
 {
 	return;
 }
