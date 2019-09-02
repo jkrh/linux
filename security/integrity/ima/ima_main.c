@@ -12,7 +12,7 @@
  *
  * File: ima_main.c
  *	implements the IMA hooks: ima_bprm_check, ima_file_mmap,
- *	and ima_file_check.
+ *	ima_file_delayed_update, ima_file_update and ima_file_check.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -26,6 +26,8 @@
 #include <linux/xattr.h>
 #include <linux/ima.h>
 #include <linux/iversion.h>
+#include <linux/workqueue.h>
+#include <linux/sizes.h>
 #include <linux/fs.h>
 
 #include "ima.h"
@@ -42,6 +44,7 @@ static int hash_setup_done;
 static struct notifier_block ima_lsm_policy_notifier = {
 	.notifier_call = ima_lsm_policy_change,
 };
+static struct workqueue_struct *ima_update_wq;
 
 static int __init hash_setup(char *str)
 {
@@ -151,6 +154,7 @@ static void ima_check_last_writer(struct integrity_iint_cache *iint,
 
 	if (!(mode & FMODE_WRITE))
 		return;
+	ima_cancel_measurement(iint);
 
 	mutex_lock(&iint->mutex);
 	if (atomic_read(&inode->i_writecount) == 1) {
@@ -419,6 +423,117 @@ int ima_bprm_check(struct linux_binprm *bprm)
 	return process_measurement(bprm->file, bprm->cred, secid, NULL, 0,
 				   MAY_EXEC, CREDS_CHECK);
 }
+
+#ifdef CONFIG_IMA_MEASURE_WRITES
+static unsigned long ima_inode_update_delay(struct inode *inode)
+{
+	unsigned long blocks, msecs;
+
+	blocks = i_size_read(inode) / SZ_1M + 1;
+	msecs = blocks * IMA_LATENCY_INCREMENT;
+	if (msecs > CONFIG_IMA_MEASUREMENT_LATENCY_CEILING)
+		msecs = CONFIG_IMA_MEASUREMENT_LATENCY_CEILING;
+
+	return msecs;
+}
+
+static void ima_delayed_update_handler(struct work_struct *work)
+{
+	struct ima_work_entry *entry;
+
+	entry = container_of(work, typeof(*entry), work.work);
+
+	ima_file_update(entry->file);
+	entry->file = NULL;
+	entry->state = IMA_WORK_INACTIVE;
+}
+
+void ima_cancel_measurement(struct integrity_iint_cache *iint)
+{
+	if (iint->ima_work.state != IMA_WORK_ACTIVE)
+		return;
+
+	cancel_delayed_work_sync(&iint->ima_work.work);
+	iint->ima_work.state = IMA_WORK_CANCELLED;
+}
+
+/**
+ * ima_file_delayed_update
+ * @file: pointer to file structure being updated
+ */
+void ima_file_delayed_update(struct file *file)
+{
+	struct inode *inode = file_inode(file);
+	struct integrity_iint_cache *iint;
+	unsigned long msecs;
+	bool creq;
+
+	if (!ima_policy_flag || !S_ISREG(inode->i_mode))
+		return;
+
+	iint = integrity_iint_find(inode);
+	if (!iint)
+		return;
+
+	if (!test_bit(IMA_UPDATE_XATTR, &iint->atomic_flags))
+		return;
+
+	mutex_lock(&iint->mutex);
+	if (iint->ima_work.state == IMA_WORK_ACTIVE)
+		goto out;
+
+	msecs = ima_inode_update_delay(inode);
+	iint->ima_work.file = file;
+	iint->ima_work.state = IMA_WORK_ACTIVE;
+	INIT_DELAYED_WORK(&iint->ima_work.work, ima_delayed_update_handler);
+
+	creq = queue_delayed_work(ima_update_wq,
+				  &iint->ima_work.work,
+				  msecs_to_jiffies(msecs));
+	if (creq == false) {
+		iint->ima_work.file = NULL;
+		iint->ima_work.state = IMA_WORK_INACTIVE;
+	}
+out:
+	mutex_unlock(&iint->mutex);
+}
+EXPORT_SYMBOL_GPL(ima_file_delayed_update);
+
+/**
+ * ima_file_update - update the file measurement
+ * @file: pointer to file structure being updated
+ */
+void ima_file_update(struct file *file)
+{
+	struct inode *inode = file_inode(file);
+	struct integrity_iint_cache *iint;
+	bool should_measure = true;
+	u64 i_version;
+
+	if (!ima_policy_flag || !S_ISREG(inode->i_mode))
+		return;
+
+	iint = integrity_iint_find(inode);
+	if (!iint)
+		return;
+
+	if (!test_bit(IMA_UPDATE_XATTR, &iint->atomic_flags))
+		return;
+
+	mutex_lock(&iint->mutex);
+	if (IS_I_VERSION(inode)) {
+		i_version = inode_query_iversion(inode);
+		if (i_version == iint->version)
+			should_measure = false;
+	}
+	if (should_measure) {
+		iint->flags &= ~IMA_COLLECTED;
+		ima_update_xattr(iint, file);
+	}
+	mutex_unlock(&iint->mutex);
+}
+EXPORT_SYMBOL_GPL(ima_file_update);
+#endif /* CONFIG_IMA_MEASURE_WRITES */
 
 /**
  * ima_path_check - based on policy, collect/store measurement.
@@ -716,9 +831,18 @@ static int __init init_ima(void)
 	if (error)
 		pr_warn("Couldn't register LSM notifier, error %d\n", error);
 
-	if (!error)
+	if (!error) {
 		ima_update_policy_flag();
 
+		ima_update_wq = alloc_workqueue("ima-update-wq",
+						WQ_MEM_RECLAIM |
+						WQ_CPU_INTENSIVE,
+						0);
+		if (!ima_update_wq) {
+			pr_err("Failed to allocate write measurement workqueue\n");
+			error = -ENOMEM;
+		}
+	}
 	return error;
 }
 

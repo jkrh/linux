@@ -93,6 +93,20 @@ static inline void ima_post_path_mknod(struct dentry *dentry)
 static inline void ima_kexec_cmdline(const void *buf, int size) {}
 #endif /* CONFIG_IMA */
 
+#if ((defined CONFIG_IMA) && defined(CONFIG_IMA_MEASURE_WRITES))
+void ima_file_update(struct file *file);
+void ima_file_delayed_update(struct file *file);
+#else
+static inline void ima_file_update(struct file *file)
+{
+	return;
+}
+static inline void ima_file_delayed_update(struct file *file)
+{
+	return;
+}
+#endif
+
 #ifndef CONFIG_IMA_KEXEC
 struct kimage;
 

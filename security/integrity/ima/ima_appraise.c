@@ -78,6 +78,15 @@ static int ima_fix_xattr(struct dentry *dentry,
 	return rc;
 }
 
+#ifdef CONFIG_IMA_MEASURE_WRITES
+inline void ima_init_measurement(struct integrity_iint_cache *iint,
+				 struct dentry *dentry)
+{
+	if (test_bit(IMA_UPDATE_XATTR, &iint->atomic_flags))
+		ima_fix_xattr(dentry, iint);
+}
+#endif
+
 /* Return specific func appraised cached result */
 enum integrity_status ima_get_cache_status(struct integrity_iint_cache *iint,
 					   enum ima_hooks func)
@@ -341,8 +350,10 @@ int ima_appraise_measurement(enum ima_hooks func,
 			iint->flags |= IMA_NEW_FILE;
 		if ((iint->flags & IMA_NEW_FILE) &&
 		    (!(iint->flags & IMA_DIGSIG_REQUIRED) ||
-		     (inode->i_size == 0)))
+		    (inode->i_size == 0))) {
+			ima_init_measurement(iint, dentry);
 			status = INTEGRITY_PASS;
+		}
 		goto out;
 	}
 

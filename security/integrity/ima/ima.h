@@ -160,6 +160,19 @@ void ima_init_template_list(void);
 int __init ima_init_digests(void);
 int ima_lsm_policy_change(struct notifier_block *nb, unsigned long event,
 			  void *lsm_data);
+#if ((defined CONFIG_IMA) && defined(CONFIG_IMA_MEASURE_WRITES))
+void ima_cancel_measurement(struct integrity_iint_cache *iint);
+#else
+static inline void ima_cancel_measurement(struct integrity_iint_cache *iint)
+{
+	return;
+}
+static inline void ima_init_measurement(struct integrity_iint_cache *iint,
+					struct dentry *dentry)
+{
+	return;
+}
+#endif
 
 /*
  * used to protect h_table and sha_table
