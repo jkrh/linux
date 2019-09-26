@@ -131,4 +131,19 @@ static inline int ima_inode_removexattr(struct dentry *dentry,
 	return 0;
 }
 #endif /* CONFIG_IMA_APPRAISE */
+
+#if (defined(CONFIG_IMA_HASH_WRITES))
+void ima_inode_update(struct inode *inode, bool sync);
+void ima_file_update(struct file *file, bool sync);
+#else
+static inline void ima_inode_update(struct inode *inode, bool sync)
+{
+	return;
+}
+static inline void ima_file_update(struct file *file, bool sync)
+{
+	return;
+}
+#endif
+
 #endif /* _LINUX_IMA_H */

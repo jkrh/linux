@@ -64,6 +64,11 @@
 #define IMA_DIGSIG		3
 #define IMA_MUST_MEASURE	4
 
+/* delayed hashing job state */
+#define IMA_WORK_INACTIVE	0
+#define IMA_WORK_ACTIVE		1
+#define IMA_WORK_CANCELLED	2
+
 enum evm_ima_xattr_type {
 	IMA_XATTR_DIGEST = 0x01,
 	EVM_XATTR_HMAC,
@@ -115,6 +120,23 @@ struct signature_v2_hdr {
 	uint8_t sig[0];		/* signature payload */
 } __packed;
 
+#if CONFIG_IMA_WRITE_HASH_LATENCY == 0
+#define IMA_LATENCY_INCREMENT	100
+#else
+#define IMA_LATENCY_INCREMENT	CONFIG_IMA_WRITE_HASH_LATENCY
+#endif
+
+struct ima_work_entry {
+	struct delayed_work work;
+	struct file *file;
+	uint8_t state;
+};
+
+struct ima_fl_entry {
+	struct list_head list;
+	struct file *file;
+};
+
 /* integrity data associated with an inode */
 struct integrity_iint_cache {
 	struct rb_node rb_node;	/* rooted in integrity_iint_tree */
@@ -131,6 +153,10 @@ struct integrity_iint_cache {
 	enum integrity_status ima_creds_status:4;
 	enum integrity_status evm_status:4;
 	struct ima_digest_data *ima_hash;
+#if (defined(CONFIG_IMA_HASH_WRITES))
+	struct ima_work_entry ima_work;
+	struct list_head file_list;
+#endif
 };
 
 /* rbtree tree calls to lookup, insert, delete

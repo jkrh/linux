@@ -29,6 +29,7 @@
 #include <linux/fs.h>
 
 #include "ima.h"
+#include "ima_write.h"
 
 #ifdef CONFIG_IMA_APPRAISE
 int ima_appraise = IMA_APPRAISE_ENFORCE;
@@ -151,8 +152,10 @@ static void ima_check_last_writer(struct integrity_iint_cache *iint,
 
 	if (!(mode & FMODE_WRITE))
 		return;
+	ima_cancel_work(iint);
 
 	mutex_lock(&iint->mutex);
+	ima_drop_file(iint, file);
 	if (atomic_read(&inode->i_writecount) == 1) {
 		update = test_and_clear_bit(IMA_UPDATE_XATTR,
 					    &iint->atomic_flags);
@@ -291,6 +294,12 @@ static int process_measurement(struct file *file, const struct cred *cred,
 		set_bit(IMA_UPDATE_XATTR, &iint->atomic_flags);
 	}
 
+	if (must_appraise && (file->f_mode & FMODE_WRITE))
+		set_bit(IMA_UPDATE_XATTR, &iint->atomic_flags);
+
+	/* Save file * for measurements triggered from the inode writeback */
+	ima_follow_file(iint, file);
+
 	/* Nothing to do, just return existing appraised status */
 	if (!action) {
 		if (must_appraise) {
@@ -358,12 +367,9 @@ out_locked:
 out:
 	if (pathbuf)
 		__putname(pathbuf);
-	if (must_appraise) {
+	if (must_appraise)
 		if (rc && (ima_appraise & IMA_APPRAISE_ENFORCE))
 			return -EACCES;
-		if (file->f_mode & FMODE_WRITE)
-			set_bit(IMA_UPDATE_XATTR, &iint->atomic_flags);
-	}
 	return 0;
 }
 
@@ -716,9 +722,10 @@ static int __init init_ima(void)
 	if (error)
 		pr_warn("Couldn't register LSM notifier, error %d\n", error);
 
-	if (!error)
+	if (!error) {
 		ima_update_policy_flag();
-
+		error = ima_init_wq();
+	}
 	return error;
 }
 
