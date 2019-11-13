@@ -11,6 +11,7 @@
 #include <crypto/sha.h>
 #include <linux/key.h>
 #include <linux/audit.h>
+#include <linux/writeback.h>
 
 /* iint action cache flags */
 #define IMA_MEASURE		0x00000001
@@ -131,6 +132,12 @@ struct integrity_iint_cache {
 	enum integrity_status ima_creds_status:4;
 	enum integrity_status evm_status:4;
 	struct ima_digest_data *ima_hash;
+#if (defined(CONFIG_IMA_HASH_WRITES))
+	struct file *saved_file;
+	enum writeback_sync_modes sync_mode;
+	long nr_pages;
+	long nr_to_write;
+#endif
 };
 
 /* rbtree tree calls to lookup, insert, delete

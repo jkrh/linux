@@ -82,6 +82,9 @@ static void iint_free(struct integrity_iint_cache *iint)
 	iint->ima_creds_status = INTEGRITY_UNKNOWN;
 	iint->evm_status = INTEGRITY_UNKNOWN;
 	iint->measured_pcrs = 0;
+#if (defined(CONFIG_IMA_HASH_WRITES))
+	WARN_ON(iint->saved_file);
+#endif
 	kmem_cache_free(iint_cache, iint);
 }
 

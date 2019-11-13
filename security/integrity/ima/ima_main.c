@@ -29,6 +29,7 @@
 #include <linux/fs.h>
 
 #include "ima.h"
+#include "ima_write.h"
 
 #ifdef CONFIG_IMA_APPRAISE
 int ima_appraise = IMA_APPRAISE_ENFORCE;
@@ -291,6 +292,12 @@ static int process_measurement(struct file *file, const struct cred *cred,
 		set_bit(IMA_UPDATE_XATTR, &iint->atomic_flags);
 	}
 
+	if (must_appraise && (file->f_mode & FMODE_WRITE))
+		set_bit(IMA_UPDATE_XATTR, &iint->atomic_flags);
+
+	/* Save file * for measurements triggered from the inode writeback */
+	ima_follow_file(iint, file);
+
 	/* Nothing to do, just return existing appraised status */
 	if (!action) {
 		if (must_appraise) {
@@ -358,12 +365,9 @@ out_locked:
 out:
 	if (pathbuf)
 		__putname(pathbuf);
-	if (must_appraise) {
+	if (must_appraise)
 		if (rc && (ima_appraise & IMA_APPRAISE_ENFORCE))
 			return -EACCES;
-		if (file->f_mode & FMODE_WRITE)
-			set_bit(IMA_UPDATE_XATTR, &iint->atomic_flags);
-	}
 	return 0;
 }
 

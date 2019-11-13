@@ -131,4 +131,25 @@ static inline int ima_inode_removexattr(struct dentry *dentry,
 	return 0;
 }
 #endif /* CONFIG_IMA_APPRAISE */
+
+#if (defined(CONFIG_IMA_HASH_WRITES))
+void ima_inode_sync_update(struct inode *inode);
+void *ima_pre_writeback(struct inode *inode, struct writeback_control *wbc);
+void ima_post_writeback(void *handle, int err, struct inode *inode,
+			struct writeback_control *wbc);
+#else
+static inline void ima_inode_sync_update(struct inode *inode)
+{
+	return;
+}
+void *ima_pre_writeback(struct inode *inode, struct writeback_control *wbc)
+{
+	return NULL;
+}
+void ima_post_writeback(void *handle, int err, struct inode *inode,
+			struct writeback_control *wbc)
+{
+}
+#endif
+
 #endif /* _LINUX_IMA_H */

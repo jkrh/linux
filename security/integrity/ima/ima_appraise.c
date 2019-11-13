@@ -14,6 +14,7 @@
 #include <linux/evm.h>
 
 #include "ima.h"
+#include "ima_write.h"
 
 static int __init default_appraise_setup(char *str)
 {
@@ -57,8 +58,8 @@ int ima_must_appraise(struct inode *inode, int mask, enum ima_hooks func)
 				IMA_APPRAISE | IMA_HASH, NULL, NULL);
 }
 
-static int ima_fix_xattr(struct dentry *dentry,
-			 struct integrity_iint_cache *iint)
+int ima_fix_xattr(struct dentry *dentry,
+		  struct integrity_iint_cache *iint)
 {
 	int rc, offset;
 	u8 algo = iint->ima_hash->algo;
@@ -341,8 +342,10 @@ int ima_appraise_measurement(enum ima_hooks func,
 			iint->flags |= IMA_NEW_FILE;
 		if ((iint->flags & IMA_NEW_FILE) &&
 		    (!(iint->flags & IMA_DIGSIG_REQUIRED) ||
-		     (inode->i_size == 0)))
+		    (inode->i_size == 0))) {
+			ima_init_hash(iint, dentry);
 			status = INTEGRITY_PASS;
+		}
 		goto out;
 	}
 
