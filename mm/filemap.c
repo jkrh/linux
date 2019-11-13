@@ -40,6 +40,7 @@
 #include <linux/rmap.h>
 #include <linux/delayacct.h>
 #include <linux/psi.h>
+#include <linux/ima.h>
 #include "internal.h"
 
 #define CREATE_TRACE_POINTS
@@ -407,12 +408,15 @@ int __filemap_fdatawrite_range(struct address_space *mapping, loff_t start,
 		.range_start = start,
 		.range_end = end,
 	};
+	void *ima_handle;
 
 	if (!mapping_cap_writeback_dirty(mapping))
 		return 0;
 
+	ima_handle = ima_pre_writeback(mapping->host, &wbc);
 	wbc_attach_fdatawrite_inode(&wbc, mapping->host);
 	ret = do_writepages(mapping, &wbc);
+	ima_post_writeback(ima_handle, ret, mapping->host, &wbc);
 	wbc_detach_inode(&wbc);
 	return ret;
 }

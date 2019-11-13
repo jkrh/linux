@@ -29,6 +29,7 @@
 #include <linux/tracepoint.h>
 #include <linux/device.h>
 #include <linux/memcontrol.h>
+#include <linux/ima.h>
 #include "internal.h"
 
 /*
@@ -1361,6 +1362,7 @@ __writeback_single_inode(struct inode *inode, struct writeback_control *wbc)
 
 	trace_writeback_single_inode_start(inode, wbc, nr_to_write);
 
+	ima_pre_writeback(inode, wbc);
 	ret = do_writepages(mapping, wbc);
 
 	/*
@@ -1416,6 +1418,7 @@ __writeback_single_inode(struct inode *inode, struct writeback_control *wbc)
 
 	spin_unlock(&inode->i_lock);
 
+	ima_post_writeback(NULL, ret, inode, wbc);
 	if (dirty & I_DIRTY_TIME)
 		mark_inode_dirty_sync(inode);
 	/* Don't write the inode if only I_DIRTY_PAGES was set */
