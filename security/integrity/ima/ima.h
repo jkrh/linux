@@ -151,20 +151,19 @@ int template_desc_init_fields(const char *template_fmt,
 struct ima_template_desc *ima_template_desc_current(void);
 struct ima_template_desc *lookup_template_desc(const char *name);
 bool ima_template_has_modsig(const struct ima_template_desc *ima_template);
+void ima_free_template_entry(struct ima_template_entry *entry);
 int ima_restore_measurement_entry(struct ima_template_entry *entry);
 int ima_restore_measurement_list(loff_t bufsize, void *buf);
 int ima_measurements_show(struct seq_file *m, void *v);
 unsigned long ima_get_binary_runtime_size(void);
 int ima_init_template(void);
 void ima_init_template_list(void);
+int ima_export_list(const char *from);
 int __init ima_init_digests(void);
 int ima_lsm_policy_change(struct notifier_block *nb, unsigned long event,
 			  void *lsm_data);
 
-/*
- * used to protect h_table and sha_table
- */
-extern spinlock_t ima_queue_lock;
+extern struct mutex ima_extend_list_mutex;
 
 struct ima_h_table {
 	atomic_long_t len;	/* number of stored measurements in the list */

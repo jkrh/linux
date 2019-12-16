@@ -22,10 +22,17 @@
 #include <linux/rcupdate.h>
 #include <linux/parser.h>
 #include <linux/vmalloc.h>
+#include <linux/fs_struct.h>
+#include <linux/syscalls.h>
 
 #include "ima.h"
 
+#define secfs_mnt	"/sys/kernel/security"
+#define am_filename	"/integrity/ima/ascii_runtime_measurements"
+
 static DEFINE_MUTEX(ima_write_mutex);
+static DEFINE_MUTEX(ima_list_mutex);
+static char *ima_msmt_list_name;
 
 bool ima_canonical_fmt;
 static int __init default_canonical_fmt_setup(char *str)
@@ -362,6 +369,7 @@ static struct dentry *ascii_runtime_measurements;
 static struct dentry *runtime_measurements_count;
 static struct dentry *violations;
 static struct dentry *ima_policy;
+static struct dentry *ima_list_name;
 
 enum ima_fs_flags {
 	IMA_FS_BUSY,
@@ -449,6 +457,162 @@ static const struct file_operations ima_measure_policy_ops = {
 	.llseek = generic_file_llseek,
 };
 
+static void ima_free_list(void)
+{
+	struct ima_queue_entry *qe, *e;
+
+	list_for_each_entry_safe(qe, e, &ima_measurements, later) {
+		hlist_del_rcu(&qe->hnext);
+		atomic_long_dec(&ima_htable.len);
+
+		list_del_rcu(&qe->later);
+		ima_free_template_entry(qe->entry);
+		kfree(qe);
+	}
+}
+
+static int ima_unlink_file(const char *filename)
+{
+	struct filename *file;
+
+	file = getname_kernel(filename);
+	if (IS_ERR(file))
+		return -EINVAL;
+
+	return do_unlinkat(AT_FDCWD, file);
+}
+
+int ima_export_list(const char *from)
+{
+	static bool init_export = true;
+
+	struct file *file_out = NULL;
+	struct file *file_in = NULL;
+	const char *to = ima_msmt_list_name;
+	ssize_t bytesin, bytesout;
+	mm_segment_t fs;
+	struct path root;
+	loff_t offin = 0, offout = 0;
+	char data[512];
+	int err = 0;
+
+	if (to == NULL)
+		goto out_err;
+	if (from == NULL)
+		from = secfs_mnt am_filename;
+
+	pr_info("exporting msmt list to %s\n", to);
+	fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	if (init_export) {
+		ima_unlink_file(to);
+		init_export = false;
+	}
+	/*
+	 * Use the root of the init task..
+	 */
+	task_lock(&init_task);
+	get_fs_root(init_task.fs, &root);
+	task_unlock(&init_task);
+
+	file_out = file_open_root(root.dentry, root.mnt, to,
+				  O_CREAT|O_WRONLY|O_APPEND|O_NOFOLLOW,
+				  0600);
+	if (IS_ERR(file_out)) {
+		err = PTR_ERR(file_out);
+		pr_err("failed to open %s, err %d\n", to, err);
+		file_out = NULL;
+		goto out_close;
+	}
+	file_in = file_open_root(root.dentry, root.mnt, from, O_RDONLY, 0);
+	if (IS_ERR(file_in)) {
+		err = PTR_ERR(file_in);
+		pr_err("failed to open %s, err %d\n", from, err);
+		file_in = NULL;
+		goto out_close;
+	}
+	mutex_lock(&ima_extend_list_mutex);
+	do {
+		bytesin = vfs_read(file_in, data, 512, &offin);
+		if (bytesin < 0) {
+			pr_err("read error at %lld\n", offin);
+			err = -EIO;
+			goto out_unlock;
+		}
+		bytesout = vfs_write(file_out, data, bytesin, &offout);
+		if (bytesin != bytesout) {
+			/*
+			 * If we fail writing, don't free the list and allow
+			 * a retry later on.
+			 */
+			pr_err("write error at %lld\n", offout);
+			err = -EIO;
+			goto out_unlock;
+		}
+	} while (bytesin == 512);
+	ima_free_list();
+
+out_unlock:
+	mutex_unlock(&ima_extend_list_mutex);
+out_close:
+	if (file_in)
+		filp_close(file_in, NULL);
+	if (file_out)
+		filp_close(file_out, NULL);
+
+	path_put(&root);
+	set_fs(fs);
+out_err:
+	return err;
+}
+
+static ssize_t ima_write_list_name(struct file *filp,
+				   const char __user *buf,
+				   size_t count, loff_t *ppos)
+{
+	int err;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	if ((count <= 1) || (count >= 255))
+		return -EINVAL;
+
+	if (*buf != '/')
+		return -EINVAL;
+
+	mutex_lock(&ima_list_mutex);
+	kfree(ima_msmt_list_name);
+
+	ima_msmt_list_name = kzalloc(count, GFP_KERNEL);
+	if (!ima_msmt_list_name) {
+		err = -ENOMEM;
+		goto out_unlock;
+	}
+	err = copy_from_user(ima_msmt_list_name, buf, count);
+	if (err) {
+		kfree(ima_msmt_list_name);
+		ima_msmt_list_name = NULL;
+		goto out_unlock;
+	}
+	if (ima_msmt_list_name[count-1] == '\n')
+		ima_msmt_list_name[count-1] = 0;
+
+	err = ima_export_list(NULL);
+out_unlock:
+	mutex_unlock(&ima_list_mutex);
+	if (err) {
+		pr_err("list export failed with %d\n", err);
+		return err;
+	}
+	return count;
+}
+
+static const struct file_operations ima_list_export_ops = {
+	.write = ima_write_list_name,
+};
+
 int __init ima_fs_init(void)
 {
 	ima_dir = securityfs_create_dir("ima", integrity_dir);
@@ -493,6 +657,11 @@ int __init ima_fs_init(void)
 	if (IS_ERR(ima_policy))
 		goto out;
 
+	ima_list_name = securityfs_create_file("list_name", 0200, ima_dir,
+					       NULL, &ima_list_export_ops);
+	if (IS_ERR(ima_list_name))
+		goto out;
+
 	return 0;
 out:
 	securityfs_remove(violations);
@@ -502,5 +671,7 @@ out:
 	securityfs_remove(ima_symlink);
 	securityfs_remove(ima_dir);
 	securityfs_remove(ima_policy);
+	securityfs_remove(ima_list_name);
+
 	return -1;
 }
